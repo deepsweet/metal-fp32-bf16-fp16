@@ -59,9 +59,22 @@ Conclusion: BF16 is natively hardware-accelerated on M3 and newer chips, FP16 of
 ## Usage
 
 ```sh
-xcrun -sdk macosx swiftc benchmark.swift -O -o benchmark
+xcrun swiftc benchmark.swift -O -o benchmark
 
 ./benchmark
+```
+
+If something goes wrong:
+
+```sh
+# if you have full Xcode app installed
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+
+# if you have only "Command Line Tools for Xcode" installed
+sudo xcode-select --switch /Library/Developer/CommandLineTools
+
+# if you don't have either install the tools
+xcode-select --install
 ```
 
 ## See also
