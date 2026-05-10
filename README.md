@@ -63,3 +63,8 @@ xcrun -sdk macosx swiftc benchmark.swift -O -o benchmark
 
 ./benchmark
 ```
+
+## See also
+
+- https://huggingface.co/collections/deepsweet/qwen36-35b-a3b
+- https://huggingface.co/collections/deepsweet/qwen36-27b
