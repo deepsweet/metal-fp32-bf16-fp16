@@ -50,22 +50,6 @@ guard isPluggedIn() else {
   )
 }
 
-func preventSleep() -> IOPMAssertionID {
-  var assertionID: IOPMAssertionID = 0
-  let reason = "Running Metal benchmark" as CFString
-  IOPMAssertionCreateWithName(
-    kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
-    IOPMAssertionLevel(kIOPMAssertionLevelOn),
-    reason,
-    &assertionID
-  )
-  return assertionID
-}
-
-func allowSleep(_ assertionID: IOPMAssertionID) {
-  IOPMAssertionRelease(assertionID)
-}
-
 let metalSource = try String(contentsOfFile: "shaders.metal", encoding: .utf8)
 
 struct Params {
@@ -360,8 +344,32 @@ results.append(
     passesPerCommandBuffer: PASSES_PER_COMMAND_BUFFER
   ))
 
+func getGPUCount(for device: MTLDevice) -> Int? {
+    let matchDict = IOServiceMatching("IOAccelerator")
+    var iterator: io_iterator_t = 0
+    guard IOServiceGetMatchingServices(kIOMainPortDefault, matchDict, &iterator) == KERN_SUCCESS else { return nil }
+    defer { IOObjectRelease(iterator) }
+
+    var service = IOIteratorNext(iterator)
+    while service != 0 {
+        defer { IOObjectRelease(service) }
+        if let coreCount = IORegistryEntryCreateCFProperty(service, "gpu-core-count" as CFString, kCFAllocatorDefault, 0)?.takeUnretainedValue() as? Int {
+            return coreCount
+        }
+        service = IOIteratorNext(iterator)
+    }
+    return nil
+}
+
 print()
-print("device: \(device.name)")
+
+let gpuCores = getGPUCount(for: device)
+
+if let gpuCores = gpuCores {
+    print("device: \(device.name) @ \(gpuCores) GPU cores")
+} else {
+    print("device: \(device.name)")
+}
 
 for r in results {
   print()

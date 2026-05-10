@@ -24,7 +24,7 @@ Hence, the scalar arithmetic throughput benchmark:
 
 ## Results
 
-### Apple M1 Pro
+### Apple M1 Pro @ 14 GPU cores
 
 | Type | min (ms) | avg (ms) | sd (ms) |  GFLOPS | GiB/s |
 |------|---------:|---------:|--------:|--------:|------:|
@@ -32,7 +32,7 @@ Hence, the scalar arithmetic throughput benchmark:
 | BF16 | 1235.884 | 1243.260 |  13.586 |  884.38 |  0.60 |
 | FP16 |  741.595 |  749.489 |  11.583 | 1467.02 |  1.00 |
 
-### Apple M2 Max
+### Apple M2 Max @ 30 GPU cores
 
 | Type | min (ms) | avg (ms) | sd (ms) |  GFLOPS | GiB/s |
 |------|---------:|---------:|--------:|--------:|------:|
@@ -51,6 +51,14 @@ Here BF16 has exactly the same execution time and GFLOPS as FP32, but half the t
 | FP32 |  586.288 |  591.953 |  10.406 | 1857.43 |  2.53 |
 | BF16 |  644.993 |  652.101 |  13.944 | 1686.11 |  1.15 |
 | FP16 |  626.088 |  637.447 |   9.340 | 1724.87 |  1.18 |
+
+### Apple M4 Pro @ 20 GPU cores
+
+| Type | min (ms) | avg (ms) | sd (ms) |  GFLOPS | GiB/s |
+|------|---------:|---------:|--------:|--------:|------:|
+| FP32 |  351.986 |  352.202 |   0.179 | 3121.82 |  4.26 |
+| BF16 |  391.734 |  391.965 |   0.158 | 2805.13 |  1.91 |
+| FP16 |  383.020 |  383.209 |   0.153 | 2869.22 |  1.96 |
 
 Here BF16 performs similarly to FP16, within measurement noise.
 
