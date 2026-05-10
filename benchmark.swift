@@ -1,4 +1,6 @@
 import Foundation
+import IOKit.pwr_mgt
+import IOKit.ps
 import Metal
 
 let NUM_ELEMENTS = 16_777_216
@@ -7,6 +9,62 @@ let WARMUP_BATCHES = 10
 let MEASURED_BATCHES = 30
 let PASSES_PER_COMMAND_BUFFER = 8
 let THREAD_GROUP_SIZE = 256
+
+func isPluggedIn() -> Bool {
+  guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+    let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef]
+  else {
+    return false
+  }
+
+  var hasBattery = false
+
+  for src in list {
+    guard
+      let desc = IOPSGetPowerSourceDescription(info, src)?.takeUnretainedValue() as? [String: Any]
+    else {
+      continue
+    }
+
+    if let type = desc[kIOPSTypeKey] as? String,
+      type == (kIOPSInternalBatteryType as String),
+      let isPresent = desc[kIOPSIsPresentKey] as? Bool,
+      isPresent
+    {
+      hasBattery = true
+
+      if let state = desc[kIOPSPowerSourceStateKey] as? String,
+        state == (kIOPSACPowerValue as String)
+      {
+        return true
+      }
+    }
+  }
+
+  return !hasBattery
+}
+
+guard isPluggedIn() else {
+  fatalError(
+    "Benchmark must be run with the MacBook plugged in. Running on battery produces misleading results."
+  )
+}
+
+func preventSleep() -> IOPMAssertionID {
+  var assertionID: IOPMAssertionID = 0
+  let reason = "Running Metal benchmark" as CFString
+  IOPMAssertionCreateWithName(
+    kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
+    IOPMAssertionLevel(kIOPMAssertionLevelOn),
+    reason,
+    &assertionID
+  )
+  return assertionID
+}
+
+func allowSleep(_ assertionID: IOPMAssertionID) {
+  IOPMAssertionRelease(assertionID)
+}
 
 let metalSource = try String(contentsOfFile: "shaders.metal", encoding: .utf8)
 
