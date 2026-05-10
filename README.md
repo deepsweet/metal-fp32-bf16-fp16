@@ -24,6 +24,14 @@ Hence, the scalar arithmetic throughput benchmark:
 
 ## Results
 
+### Apple M1 Pro
+
+| Type | min (ms) | avg (ms) | sd (ms) |  GFLOPS | GiB/s |
+|------|---------:|---------:|--------:|--------:|------:|
+| FP32 | 1234.395 | 1241.841 |  13.577 |  885.39 |  1.21 |
+| BF16 | 1235.884 | 1243.260 |  13.586 |  884.38 |  0.60 |
+| FP16 |  741.595 |  749.489 |  11.583 | 1467.02 |  1.00 |
+
 ### Apple M2 Max
 
 | Type | min (ms) | avg (ms) | sd (ms) |  GFLOPS | GiB/s |
@@ -34,7 +42,7 @@ Hence, the scalar arithmetic throughput benchmark:
 
 Here BF16 has exactly the same execution time and GFLOPS as FP32, but half the throughput because it uses 2‑byte elements instead of 4‑byte.
 
-Conclusion: BF16 is clearly software‑emulated via FP32 on M2 Max, FP16 offers a noticeable advantage.
+Conclusion: BF16 is clearly software‑emulated via FP32 on M1 and M2 chips, FP16 offers a noticeable advantage.
 
 ### Apple M3 Pro
 
