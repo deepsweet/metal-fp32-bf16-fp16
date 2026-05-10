@@ -42,7 +42,7 @@ Hence, the scalar arithmetic throughput benchmark:
 
 Here BF16 has exactly the same execution time and GFLOPS as FP32, but half the throughput because it uses 2‑byte elements instead of 4‑byte.
 
-Conclusion: BF16 is clearly software‑emulated via FP32 on M1 and M2 chips, FP16 offers a noticeable advantage.
+**Conclusion**: BF16 is clearly software‑emulated via FP32 on M1 and M2 chips, FP16 offers a noticeable advantage.
 
 ### Apple M3 Pro
 
@@ -54,7 +54,7 @@ Conclusion: BF16 is clearly software‑emulated via FP32 on M1 and M2 chips, FP1
 
 Here BF16 performs similarly to FP16, within measurement noise.
 
-Conclusion: BF16 is natively hardware-accelerated on M3 and newer chips, FP16 offers no measurable advantage.
+**Conclusion**: BF16 is natively hardware-accelerated on M3 and newer chips, FP16 offers no measurable advantage.
 
 ## Usage
 
