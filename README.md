@@ -51,6 +51,14 @@ Hence, the scalar arithmetic throughput benchmark:
 | BF16 |  644.993 |  652.101 |  13.944 | 1686.11 |  1.15 |
 | FP16 |  626.088 |  637.447 |   9.340 | 1724.87 |  1.18 |
 
+### Apple M4 @ 10 GPU cores
+
+| Type | min (ms) | avg (ms) | sd (ms) |  GFLOPS | GiB/s |
+|------|---------:|---------:|--------:|--------:|------:|
+| FP32 |  704.853 |  705.351 |   0.243 | 1558.82 |  2.13 |
+| BF16 |  782.394 |  782.890 |   0.301 | 1404.43 |  0.96 |
+| FP16 |  766.464 |  766.951 |   0.350 | 1433.61 |  0.98 |
+
 ### Apple M4 Pro @ 20 GPU cores
 
 | Type | min (ms) | avg (ms) | sd (ms) |  GFLOPS | GiB/s |
