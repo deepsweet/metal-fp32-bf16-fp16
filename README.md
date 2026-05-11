@@ -38,6 +38,14 @@ Hence, the scalar arithmetic throughput benchmark:
 | BF16 |  534.893 |  534.922 |   0.045 | 2055.46 |  1.40 |
 | FP16 |  323.488 |  323.501 |   0.013 | 3398.79 |  2.32 |
 
+### Apple M2 Max @ 38 GPU cores
+
+| Type | min (ms) | avg (ms) | sd (ms) |  GFLOPS | GiB/s |
+|------|---------:|---------:|--------:|--------:|------:|
+| FP32 |  422.032 |  422.522 |   0.386 | 2602.26 |  3.55 |
+| BF16 |  422.362 |  422.861 |   0.445 | 2600.17 |  1.77 |
+| FP16 |  255.440 |  258.508 |   4.738 | 4253.30 |  2.90 |
+
 >[!NOTE]
 >Here BF16 has exactly the same execution time and GFLOPS as FP32, but half the throughput because it uses half the bytes.
 >
