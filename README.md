@@ -12,11 +12,9 @@ To confuse things even more, M2 Max positively claims to support the correspondi
 
 ```sh
 sysctl -n hw.optional.arm.FEAT_BF16
-
-1
 ```
 
-M1 Pro returns `0`. But that's about CPU, not Metal on GPU.
+And M1 Pro returns `0`. But that's about CPU, not Metal on GPU.
 
 Yet I still couldn't find hard evidence.
 
@@ -45,7 +43,7 @@ Hence, the scalar arithmetic throughput benchmark:
 >
 >**Conclusion**: BF16 is clearly software‑emulated via FP32 on M1 and M2 chips, FP16 offers a noticeable advantage.
 
-### Apple M3 Pro
+### Apple M3 Pro @ 14 GPU cores
 
 | Type | min (ms) | avg (ms) | sd (ms) |  GFLOPS | GiB/s |
 |------|---------:|---------:|--------:|--------:|------:|
@@ -83,7 +81,7 @@ sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 # if you have only "Command Line Tools for Xcode" installed
 sudo xcode-select --switch /Library/Developer/CommandLineTools
 
-# if you don't have either install the tools
+# if you don't have either then install the tools
 xcode-select --install
 ```
 
