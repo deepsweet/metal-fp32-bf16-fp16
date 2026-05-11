@@ -1,0 +1,7 @@
+identifier_name:
+  excluded:
+    - i
+    - a
+    - b
+disabled_rules:
+  - function_parameter_count

@@ -2,8 +2,8 @@
 using namespace metal;
 
 struct Params {
-    uint n;
-    uint iters;
+    uint numElements;
+    uint numIterations;
 };
 
 // FP32 kernel
@@ -14,12 +14,12 @@ kernel void bench_f32(
     constant Params &p [[buffer(3)]],
     uint gid [[thread_position_in_grid]])
 {
-    if (gid >= p.n) return;
+    if (gid >= p.numElements) return;
     float x = a[gid];
     float y = b[gid];
     float c = 1.0009765625f;
     #pragma clang loop unroll(disable)
-    for (uint i = 0; i < p.iters; ++i) {
+    for (uint i = 0; i < p.numIterations; ++i) {
         x = fma(x, y, c);
         y = fma(y, c, x);
         c = c + 0.00006103515625f;
@@ -36,12 +36,12 @@ kernel void bench_bf16(
     constant Params &p [[buffer(3)]],
     uint gid [[thread_position_in_grid]])
 {
-    if (gid >= p.n) return;
+    if (gid >= p.numElements) return;
     float xf = float(a[gid]);
     float yf = float(b[gid]);
     float cf = 1.0f;
     #pragma clang loop unroll(disable)
-    for (uint i = 0; i < p.iters; ++i) {
+    for (uint i = 0; i < p.numIterations; ++i) {
         xf = fma(xf, yf, cf);
         yf = fma(yf, cf, xf);
         cf = cf + 0.00006103515625f;
@@ -58,12 +58,12 @@ kernel void bench_f16(
     constant Params &p [[buffer(3)]],
     uint gid [[thread_position_in_grid]])
 {
-    if (gid >= p.n) return;
+    if (gid >= p.numElements) return;
     half x = a[gid];
     half y = b[gid];
     half c = half(1.0009765625h);
     #pragma clang loop unroll(disable)
-    for (uint i = 0; i < p.iters; ++i) {
+    for (uint i = 0; i < p.numIterations; ++i) {
         x = fma(x, y, c);
         y = fma(y, c, x);
         c = c + half(0.00006103515625h);

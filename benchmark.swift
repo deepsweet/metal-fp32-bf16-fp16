@@ -1,14 +1,14 @@
 import Foundation
-import IOKit.pwr_mgt
 import IOKit.ps
+import IOKit.pwr_mgt
 import Metal
 
-let NUM_ELEMENTS = 16_777_216
-let ITERATIONS_PER_KERNEL = 2048
-let WARMUP_BATCHES = 10
-let MEASURED_BATCHES = 30
-let PASSES_PER_COMMAND_BUFFER = 8
-let THREAD_GROUP_SIZE = 256
+let numElements = 16_777_216
+let numIterations = 2048
+let numWarmupBatches = 10
+let numMeasuredBatches = 30
+let numDispatches = 8
+let threadGroupSize = 256
 
 func isPluggedIn() -> Bool {
   guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
@@ -29,13 +29,11 @@ func isPluggedIn() -> Bool {
     if let type = desc[kIOPSTypeKey] as? String,
       type == (kIOPSInternalBatteryType as String),
       let isPresent = desc[kIOPSIsPresentKey] as? Bool,
-      isPresent
-    {
+      isPresent {
       hasBattery = true
 
       if let state = desc[kIOPSPowerSourceStateKey] as? String,
-        state == (kIOPSACPowerValue as String)
-      {
+        state == (kIOPSACPowerValue as String) {
         return true
       }
     }
@@ -53,8 +51,8 @@ guard isPluggedIn() else {
 let metalSource = try String(contentsOfFile: "shaders.metal", encoding: .utf8)
 
 struct Params {
-  var n: UInt32
-  var iters: UInt32
+  var numElements: UInt32
+  var numIterations: UInt32
 }
 
 struct Result {
@@ -66,17 +64,7 @@ struct Result {
   let gibPerSec: Double
 }
 
-func makePipeline(device: MTLDevice, library: MTLLibrary, name: String) throws
-  -> MTLComputePipelineState
-{
-  guard let fn = library.makeFunction(name: name) else {
-    fatalError("Function \(name) not found in library")
-  }
-  return try device.makeComputePipelineState(function: fn)
-}
-
-func makeRandomBuffer<T>(device: MTLDevice, count: Int, type: T.Type, fill: (Int) -> T) -> MTLBuffer
-{
+func makeRandomBuffer<T>(device: MTLDevice, count: Int, type: T.Type, fill: (Int) -> T) -> MTLBuffer {
   let stride = MemoryLayout<T>.stride
   let options: MTLResourceOptions = [.storageModeShared, .hazardTrackingModeUntracked]
   let buffer = device.makeBuffer(length: count * stride, options: options)!
@@ -86,8 +74,8 @@ func makeRandomBuffer<T>(device: MTLDevice, count: Int, type: T.Type, fill: (Int
 }
 
 // Apple does not provide a BFloat16 type in Swift
-func f32toBF16Bits(_ x: Float) -> UInt16 {
-  let bits = x.bitPattern
+func f32toBF16Bits(_ value: Float) -> UInt16 {
+  let bits = value.bitPattern
   let lsb = (bits >> 16) & 1
   let roundingBias: UInt32 = 0x7FFF + lsb
   return UInt16(truncatingIfNeeded: (bits + roundingBias) >> 16)
@@ -100,15 +88,15 @@ func runBatch(
   b: MTLBuffer,
   out: MTLBuffer,
   params: MTLBuffer,
-  n: Int,
-  passesPerCommandBuffer: Int
+  numElements: Int,
+  numDispatches: Int
 ) -> Double {
-  let threadsPerTG = MTLSize(width: THREAD_GROUP_SIZE, height: 1, depth: 1)
-  let threadsPerGrid = MTLSize(width: n, height: 1, depth: 1)
-  let cb = queue.makeCommandBuffer()!
+  let threadsPerTG = MTLSize(width: threadGroupSize, height: 1, depth: 1)
+  let threadsPerGrid = MTLSize(width: numElements, height: 1, depth: 1)
+  let commandBuffer = queue.makeCommandBuffer()!
 
-  for _ in 0..<passesPerCommandBuffer {
-    let enc = cb.makeComputeCommandEncoder()!
+  for _ in 0..<numDispatches {
+    let enc = commandBuffer.makeComputeCommandEncoder()!
     enc.setComputePipelineState(pipeline)
     enc.setBuffer(a, offset: 0, index: 0)
     enc.setBuffer(b, offset: 0, index: 1)
@@ -117,11 +105,11 @@ func runBatch(
     enc.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerTG)
     enc.endEncoding()
   }
-  cb.commit()
-  cb.waitUntilCompleted()
+  commandBuffer.commit()
+  commandBuffer.waitUntilCompleted()
 
-  if cb.status == .completed, cb.gpuEndTime > cb.gpuStartTime {
-    return (cb.gpuEndTime - cb.gpuStartTime) * 1000.0
+  if commandBuffer.status == .completed, commandBuffer.gpuEndTime > commandBuffer.gpuStartTime {
+    return (commandBuffer.gpuEndTime - commandBuffer.gpuStartTime) * 1000.0
   }
   return -1
 }
@@ -129,18 +117,19 @@ func runBatch(
 func computeStats(
   name: String,
   samples: [Double],
-  n: Int,
+  numElements: Int,
   bytesPerElement: Int,
-  iters: Int,
-  passesPerCommandBuffer: Int
+  numIterations: Int,
+  numDispatches: Int
 ) -> Result {
   let minMS = samples.min() ?? -1
   let avgMS = samples.reduce(0, +) / Double(samples.count)
   let variance = samples.reduce(0.0) { $0 + pow($1 - avgMS, 2) } / Double(max(samples.count, 1))
   let stdMS = sqrt(variance)
 
-  let totalFlops = Double(n) * Double(iters * 4) * Double(passesPerCommandBuffer)
-  let totalBytes = Double(n * bytesPerElement * 3 * passesPerCommandBuffer)
+  let totalFlops =
+    Double(numElements) * Double(numIterations * 4) * Double(numDispatches)
+  let totalBytes = Double(numElements * bytesPerElement * 3 * numDispatches)
   let avgSeconds = avgMS / 1000.0
   let gflops = avgSeconds > 0 ? totalFlops / avgSeconds / 1e9 : -1
   let gibPerSec = avgSeconds > 0 ? totalBytes / avgSeconds / Double(1 << 30) : -1
@@ -163,15 +152,15 @@ func benchmark(
   b: MTLBuffer,
   out: MTLBuffer,
   params: MTLBuffer,
-  n: Int,
+  numElements: Int,
   bytesPerElement: Int,
-  iters: Int,
-  warmupBatches: Int,
-  measuredBatches: Int,
-  passesPerCommandBuffer: Int
+  numIterations: Int,
+  numWarmupBatches: Int,
+  numMeasuredBatches: Int,
+  numDispatches: Int
 ) -> Result {
   // Warmup
-  for _ in 0..<warmupBatches {
+  for _ in 0..<numWarmupBatches {
     _ = runBatch(
       queue: queue,
       pipeline: pipeline,
@@ -179,35 +168,35 @@ func benchmark(
       b: b,
       out: out,
       params: params,
-      n: n,
-      passesPerCommandBuffer: passesPerCommandBuffer
+      numElements: numElements,
+      numDispatches: numDispatches
     )
   }
 
   var samples: [Double] = []
-  samples.reserveCapacity(measuredBatches)
+  samples.reserveCapacity(numMeasuredBatches)
 
-  for _ in 0..<measuredBatches {
-    let ms = runBatch(
+  for _ in 0..<numMeasuredBatches {
+    let elapsedMs = runBatch(
       queue: queue,
       pipeline: pipeline,
       a: a,
       b: b,
       out: out,
       params: params,
-      n: n,
-      passesPerCommandBuffer: passesPerCommandBuffer
+      numElements: numElements,
+      numDispatches: numDispatches
     )
-    if ms > 0 { samples.append(ms) }
+    if elapsedMs > 0 { samples.append(elapsedMs) }
   }
 
   return computeStats(
     name: name,
     samples: samples,
-    n: n,
+    numElements: numElements,
     bytesPerElement: bytesPerElement,
-    iters: iters,
-    passesPerCommandBuffer: passesPerCommandBuffer
+    numIterations: numIterations,
+    numDispatches: numDispatches
   )
 }
 
@@ -225,46 +214,52 @@ if #available(macOS 15.0, *) {
 
 let library = try device.makeLibrary(source: metalSource, options: compileOptions)
 
-let p16 = try makePipeline(device: device, library: library, name: "bench_f16")
-let p32 = try makePipeline(device: device, library: library, name: "bench_f32")
-let pbf16 = try makePipeline(device: device, library: library, name: "bench_bf16")
+let p16 = try device.makeComputePipelineState(
+  function: library.makeFunction(name: "bench_f16")!)
+let p32 = try device.makeComputePipelineState(
+  function: library.makeFunction(name: "bench_f32")!)
+let pbf16 = try device.makeComputePipelineState(
+  function: library.makeFunction(name: "bench_bf16")!)
 
 // Pre-warm the GPU by running one dummy batch for each pipeline
 let dummyParams = device.makeBuffer(
   length: MemoryLayout<Params>.stride, options: .storageModeShared)!
-dummyParams.contents().bindMemory(to: Params.self, capacity: 1).pointee = Params(n: 1, iters: 1)
+dummyParams.contents().bindMemory(to: Params.self, capacity: 1).pointee = Params(
+  numElements: 1, numIterations: 1)
 
 for (_, pipeline) in [("fp16", p16), ("fp32", p32)] {
   let dummyBuffer = device.makeBuffer(length: 2, options: .storageModeShared)!
   _ = runBatch(
     queue: queue, pipeline: pipeline, a: dummyBuffer, b: dummyBuffer, out: dummyBuffer,
-    params: dummyParams, n: 1, passesPerCommandBuffer: 1)
+    params: dummyParams, numElements: 1, numDispatches: 1)
 }
 
 let dummyBuffer = device.makeBuffer(length: 2, options: .storageModeShared)!
 _ = runBatch(
   queue: queue, pipeline: pbf16, a: dummyBuffer, b: dummyBuffer, out: dummyBuffer,
-  params: dummyParams, n: 1, passesPerCommandBuffer: 1)
+  params: dummyParams, numElements: 1, numDispatches: 1)
 
 // Shared parameters buffer
 let paramsBuffer = device.makeBuffer(
   length: MemoryLayout<Params>.stride,
   options: [.storageModeShared, .hazardTrackingModeUntracked])!
 paramsBuffer.contents().bindMemory(to: Params.self, capacity: 1).pointee = Params(
-  n: UInt32(NUM_ELEMENTS), iters: UInt32(ITERATIONS_PER_KERNEL))
+  numElements: UInt32(numElements), numIterations: UInt32(numIterations))
 
 // Run benchmarks
 var results: [Result] = []
 
 // FP32
-let fp32_a = makeRandomBuffer(device: device, count: NUM_ELEMENTS, type: Float.self) { i in
-  Float((i % 1024) + 1) / 1024.0
+let fp32A = makeRandomBuffer(device: device, count: numElements, type: Float.self) { i in
+  let sample = Float((i % 1024) + 1) / 1024.0
+  return sample
 }
-let fp32_b = makeRandomBuffer(device: device, count: NUM_ELEMENTS, type: Float.self) { i in
-  Float(((i * 13) % 1024) + 1) / 2048.0
+let fp32B = makeRandomBuffer(device: device, count: numElements, type: Float.self) { i in
+  let sample = Float(((i * 13) % 1024) + 1) / 2048.0
+  return sample
 }
-let fp32_out = device.makeBuffer(
-  length: NUM_ELEMENTS * MemoryLayout<Float>.stride,
+let fp32Out = device.makeBuffer(
+  length: numElements * MemoryLayout<Float>.stride,
   options: [.storageModeShared, .hazardTrackingModeUntracked])!
 
 results.append(
@@ -272,29 +267,29 @@ results.append(
     name: "FP32",
     queue: queue,
     pipeline: p32,
-    a: fp32_a,
-    b: fp32_b,
-    out: fp32_out,
+    a: fp32A,
+    b: fp32B,
+    out: fp32Out,
     params: paramsBuffer,
-    n: NUM_ELEMENTS,
+    numElements: numElements,
     bytesPerElement: 4,
-    iters: ITERATIONS_PER_KERNEL,
-    warmupBatches: WARMUP_BATCHES,
-    measuredBatches: MEASURED_BATCHES,
-    passesPerCommandBuffer: PASSES_PER_COMMAND_BUFFER
+    numIterations: numIterations,
+    numWarmupBatches: numWarmupBatches,
+    numMeasuredBatches: numMeasuredBatches,
+    numDispatches: numDispatches
   ))
 
 // BF16
-let bf16_a = makeRandomBuffer(device: device, count: NUM_ELEMENTS, type: UInt16.self) { i in
-  let x = Float((i % 1024) + 1) / 1024.0
-  return f32toBF16Bits(x)
+let bf16A = makeRandomBuffer(device: device, count: numElements, type: UInt16.self) { i in
+  let sample = Float((i % 1024) + 1) / 1024.0
+  return f32toBF16Bits(sample)
 }
-let bf16_b = makeRandomBuffer(device: device, count: NUM_ELEMENTS, type: UInt16.self) { i in
-  let x = Float(((i * 13) % 1024) + 1) / 2048.0
-  return f32toBF16Bits(x)
+let bf16B = makeRandomBuffer(device: device, count: numElements, type: UInt16.self) { i in
+  let sample = Float(((i * 13) % 1024) + 1) / 2048.0
+  return f32toBF16Bits(sample)
 }
-let bf16_out = device.makeBuffer(
-  length: NUM_ELEMENTS * MemoryLayout<UInt16>.stride,
+let bf16Out = device.makeBuffer(
+  length: numElements * MemoryLayout<UInt16>.stride,
   options: [.storageModeShared, .hazardTrackingModeUntracked])!
 
 results.append(
@@ -302,29 +297,29 @@ results.append(
     name: "BF16",
     queue: queue,
     pipeline: pbf16,
-    a: bf16_a,
-    b: bf16_b,
-    out: bf16_out,
+    a: bf16A,
+    b: bf16B,
+    out: bf16Out,
     params: paramsBuffer,
-    n: NUM_ELEMENTS,
+    numElements: numElements,
     bytesPerElement: 2,
-    iters: ITERATIONS_PER_KERNEL,
-    warmupBatches: WARMUP_BATCHES,
-    measuredBatches: MEASURED_BATCHES,
-    passesPerCommandBuffer: PASSES_PER_COMMAND_BUFFER
+    numIterations: numIterations,
+    numWarmupBatches: numWarmupBatches,
+    numMeasuredBatches: numMeasuredBatches,
+    numDispatches: numDispatches
   ))
 
 // FP16
-let fp16_a = makeRandomBuffer(device: device, count: NUM_ELEMENTS, type: UInt16.self) { i in
-  let x = Float((i % 1024) + 1) / 1024.0
-  return Float16(x).bitPattern
+let fp16A = makeRandomBuffer(device: device, count: numElements, type: UInt16.self) { i in
+  let sample = Float((i % 1024) + 1) / 1024.0
+  return Float16(sample).bitPattern
 }
-let fp16_b = makeRandomBuffer(device: device, count: NUM_ELEMENTS, type: UInt16.self) { i in
-  let x = Float(((i * 13) % 1024) + 1) / 2048.0
-  return Float16(x).bitPattern
+let fp16B = makeRandomBuffer(device: device, count: numElements, type: UInt16.self) { i in
+  let sample = Float(((i * 13) % 1024) + 1) / 2048.0
+  return Float16(sample).bitPattern
 }
-let fp16_out = device.makeBuffer(
-  length: NUM_ELEMENTS * MemoryLayout<UInt16>.stride,
+let fp16Out = device.makeBuffer(
+  length: numElements * MemoryLayout<UInt16>.stride,
   options: [.storageModeShared, .hazardTrackingModeUntracked])!
 
 results.append(
@@ -332,33 +327,35 @@ results.append(
     name: "FP16",
     queue: queue,
     pipeline: p16,
-    a: fp16_a,
-    b: fp16_b,
-    out: fp16_out,
+    a: fp16A,
+    b: fp16B,
+    out: fp16Out,
     params: paramsBuffer,
-    n: NUM_ELEMENTS,
+    numElements: numElements,
     bytesPerElement: 2,
-    iters: ITERATIONS_PER_KERNEL,
-    warmupBatches: WARMUP_BATCHES,
-    measuredBatches: MEASURED_BATCHES,
-    passesPerCommandBuffer: PASSES_PER_COMMAND_BUFFER
+    numIterations: numIterations,
+    numWarmupBatches: numWarmupBatches,
+    numMeasuredBatches: numMeasuredBatches,
+    numDispatches: numDispatches
   ))
 
 func getGPUCount(for device: MTLDevice) -> Int? {
-    let matchDict = IOServiceMatching("IOAccelerator")
-    var iterator: io_iterator_t = 0
-    guard IOServiceGetMatchingServices(kIOMainPortDefault, matchDict, &iterator) == KERN_SUCCESS else { return nil }
-    defer { IOObjectRelease(iterator) }
+  let matchDict = IOServiceMatching("IOAccelerator")
+  var iterator: io_iterator_t = 0
+  guard IOServiceGetMatchingServices(kIOMainPortDefault, matchDict, &iterator) == KERN_SUCCESS
+  else { return nil }
+  defer { IOObjectRelease(iterator) }
 
-    var service = IOIteratorNext(iterator)
-    while service != 0 {
-        defer { IOObjectRelease(service) }
-        if let coreCount = IORegistryEntryCreateCFProperty(service, "gpu-core-count" as CFString, kCFAllocatorDefault, 0)?.takeUnretainedValue() as? Int {
-            return coreCount
-        }
-        service = IOIteratorNext(iterator)
+  var service = IOIteratorNext(iterator)
+  while service != 0 {
+    defer { IOObjectRelease(service) }
+    if let coreCount = IORegistryEntryCreateCFProperty(
+      service, "gpu-core-count" as CFString, kCFAllocatorDefault, 0)?.takeUnretainedValue() as? Int {
+      return coreCount
     }
-    return nil
+    service = IOIteratorNext(iterator)
+  }
+  return nil
 }
 
 print()
@@ -366,17 +363,17 @@ print()
 let gpuCores = getGPUCount(for: device)
 
 if let gpuCores = gpuCores {
-    print("device: \(device.name) @ \(gpuCores) GPU cores")
+  print("device: \(device.name) @ \(gpuCores) GPU cores")
 } else {
-    print("device: \(device.name)")
+  print("device: \(device.name)")
 }
 
-for r in results {
+for result in results {
   print()
-  print("type: \(r.name)")
-  print("min: \(String(format: "%.3f", r.minMS)) ms")
-  print("avg: \(String(format: "%.3f", r.avgMS)) ms")
-  print("sd: \(String(format: "%.3f", r.stdMS)) ms")
-  print("perf: \(String(format: "%.2f", r.gflops)) GFLOPS")
-  print("throughput: \(String(format: "%.2f", r.gibPerSec)) GiB/s")
+  print("type: \(result.name)")
+  print("min: \(String(format: "%.3f", result.minMS)) ms")
+  print("avg: \(String(format: "%.3f", result.avgMS)) ms")
+  print("sd: \(String(format: "%.3f", result.stdMS)) ms")
+  print("perf: \(String(format: "%.2f", result.gflops)) GFLOPS")
+  print("throughput: \(String(format: "%.2f", result.gibPerSec)) GiB/s")
 }
