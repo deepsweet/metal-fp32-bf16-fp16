@@ -81,16 +81,34 @@ func f32toBF16Bits(_ value: Float) -> UInt16 {
   return UInt16(truncatingIfNeeded: (bits + roundingBias) >> 16)
 }
 
+func getGPUCount(for device: MTLDevice) -> Int? {
+  let matchDict = IOServiceMatching("IOAccelerator")
+  var iterator: io_iterator_t = 0
+  guard IOServiceGetMatchingServices(kIOMainPortDefault, matchDict, &iterator) == KERN_SUCCESS
+  else { return nil }
+  defer { IOObjectRelease(iterator) }
+
+  var service = IOIteratorNext(iterator)
+  while service != 0 {
+    defer { IOObjectRelease(service) }
+    if let coreCount = IORegistryEntryCreateCFProperty(
+      service, "gpu-core-count" as CFString, kCFAllocatorDefault, 0)?.takeUnretainedValue() as? Int {
+      return coreCount
+    }
+    service = IOIteratorNext(iterator)
+  }
+
+  return nil
+}
+
 func runBatch(
   queue: MTLCommandQueue,
   pipeline: MTLComputePipelineState,
   a: MTLBuffer,
   b: MTLBuffer,
   out: MTLBuffer,
-  params: MTLBuffer,
-  numElements: Int,
-  numDispatches: Int
-) -> Double {
+  params: MTLBuffer
+) -> Double? {
   let threadsPerTG = MTLSize(width: threadGroupSize, height: 1, depth: 1)
   let threadsPerGrid = MTLSize(width: numElements, height: 1, depth: 1)
   let commandBuffer = queue.makeCommandBuffer()!
@@ -108,27 +126,24 @@ func runBatch(
   commandBuffer.commit()
   commandBuffer.waitUntilCompleted()
 
-  if commandBuffer.status == .completed, commandBuffer.gpuEndTime > commandBuffer.gpuStartTime {
-    return (commandBuffer.gpuEndTime - commandBuffer.gpuStartTime) * 1000.0
-  }
-  return -1
+  guard commandBuffer.status == .completed,
+    commandBuffer.gpuEndTime > commandBuffer.gpuStartTime
+  else { return nil }
+
+  return (commandBuffer.gpuEndTime - commandBuffer.gpuStartTime) * 1000.0
 }
 
 func computeStats(
   name: String,
   samples: [Double],
-  numElements: Int,
-  bytesPerElement: Int,
-  numIterations: Int,
-  numDispatches: Int
+  bytesPerElement: Int
 ) -> Result {
   let minMS = samples.min() ?? -1
   let avgMS = samples.reduce(0, +) / Double(samples.count)
   let variance = samples.reduce(0.0) { $0 + pow($1 - avgMS, 2) } / Double(max(samples.count, 1))
   let stdMS = sqrt(variance)
 
-  let totalFlops =
-    Double(numElements) * Double(numIterations * 4) * Double(numDispatches)
+  let totalFlops = Double(numElements) * Double(numIterations * 4) * Double(numDispatches)
   let totalBytes = Double(numElements * bytesPerElement * 3 * numDispatches)
   let avgSeconds = avgMS / 1000.0
   let gflops = avgSeconds > 0 ? totalFlops / avgSeconds / 1e9 : -1
@@ -146,18 +161,11 @@ func computeStats(
 
 func benchmark(
   name: String,
-  queue: MTLCommandQueue,
   pipeline: MTLComputePipelineState,
   a: MTLBuffer,
   b: MTLBuffer,
   out: MTLBuffer,
-  params: MTLBuffer,
-  numElements: Int,
-  bytesPerElement: Int,
-  numIterations: Int,
-  numWarmupBatches: Int,
-  numMeasuredBatches: Int,
-  numDispatches: Int
+  bytesPerElement: Int
 ) -> Result {
   // Warmup
   for _ in 0..<numWarmupBatches {
@@ -167,9 +175,7 @@ func benchmark(
       a: a,
       b: b,
       out: out,
-      params: params,
-      numElements: numElements,
-      numDispatches: numDispatches
+      params: paramsBuffer
     )
   }
 
@@ -177,26 +183,22 @@ func benchmark(
   samples.reserveCapacity(numMeasuredBatches)
 
   for _ in 0..<numMeasuredBatches {
-    let elapsedMs = runBatch(
+    if let elapsedMs = runBatch(
       queue: queue,
       pipeline: pipeline,
       a: a,
       b: b,
       out: out,
-      params: params,
-      numElements: numElements,
-      numDispatches: numDispatches
-    )
-    if elapsedMs > 0 { samples.append(elapsedMs) }
+      params: paramsBuffer
+    ) {
+      samples.append(elapsedMs)
+    }
   }
 
   return computeStats(
     name: name,
     samples: samples,
-    numElements: numElements,
-    bytesPerElement: bytesPerElement,
-    numIterations: numIterations,
-    numDispatches: numDispatches
+    bytesPerElement: bytesPerElement
   )
 }
 
@@ -224,27 +226,35 @@ let pbf16 = try device.makeComputePipelineState(
 // Pre-warm the GPU by running one dummy batch for each pipeline
 let dummyParams = device.makeBuffer(
   length: MemoryLayout<Params>.stride, options: .storageModeShared)!
-dummyParams.contents().bindMemory(to: Params.self, capacity: 1).pointee = Params(
-  numElements: 1, numIterations: 1)
 
-for (_, pipeline) in [("fp16", p16), ("fp32", p32)] {
+dummyParams.contents().bindMemory(to: Params.self, capacity: 1).pointee = Params(
+  numElements: 1,
+  numIterations: 1
+)
+
+let pipelines: [(String, MTLComputePipelineState)] = [("fp16", p16), ("fp32", p32), ("bf16", pbf16)]
+
+for (_, pipeline) in pipelines {
   let dummyBuffer = device.makeBuffer(length: 2, options: .storageModeShared)!
   _ = runBatch(
-    queue: queue, pipeline: pipeline, a: dummyBuffer, b: dummyBuffer, out: dummyBuffer,
-    params: dummyParams, numElements: 1, numDispatches: 1)
+    queue: queue,
+    pipeline: pipeline,
+    a: dummyBuffer,
+    b: dummyBuffer,
+    out: dummyBuffer,
+    params: dummyParams
+  )
 }
-
-let dummyBuffer = device.makeBuffer(length: 2, options: .storageModeShared)!
-_ = runBatch(
-  queue: queue, pipeline: pbf16, a: dummyBuffer, b: dummyBuffer, out: dummyBuffer,
-  params: dummyParams, numElements: 1, numDispatches: 1)
 
 // Shared parameters buffer
 let paramsBuffer = device.makeBuffer(
   length: MemoryLayout<Params>.stride,
   options: [.storageModeShared, .hazardTrackingModeUntracked])!
+
 paramsBuffer.contents().bindMemory(to: Params.self, capacity: 1).pointee = Params(
-  numElements: UInt32(numElements), numIterations: UInt32(numIterations))
+  numElements: UInt32(numElements),
+  numIterations: UInt32(numIterations)
+)
 
 // Run benchmarks
 var results: [Result] = []
@@ -260,24 +270,19 @@ let fp32B = makeRandomBuffer(device: device, count: numElements, type: Float.sel
 }
 let fp32Out = device.makeBuffer(
   length: numElements * MemoryLayout<Float>.stride,
-  options: [.storageModeShared, .hazardTrackingModeUntracked])!
+  options: [.storageModeShared, .hazardTrackingModeUntracked]
+)!
 
 results.append(
   benchmark(
     name: "FP32",
-    queue: queue,
     pipeline: p32,
     a: fp32A,
     b: fp32B,
     out: fp32Out,
-    params: paramsBuffer,
-    numElements: numElements,
-    bytesPerElement: 4,
-    numIterations: numIterations,
-    numWarmupBatches: numWarmupBatches,
-    numMeasuredBatches: numMeasuredBatches,
-    numDispatches: numDispatches
-  ))
+    bytesPerElement: 4
+  )
+)
 
 // BF16
 let bf16A = makeRandomBuffer(device: device, count: numElements, type: UInt16.self) { i in
@@ -290,24 +295,19 @@ let bf16B = makeRandomBuffer(device: device, count: numElements, type: UInt16.se
 }
 let bf16Out = device.makeBuffer(
   length: numElements * MemoryLayout<UInt16>.stride,
-  options: [.storageModeShared, .hazardTrackingModeUntracked])!
+  options: [.storageModeShared, .hazardTrackingModeUntracked]
+)!
 
 results.append(
   benchmark(
     name: "BF16",
-    queue: queue,
     pipeline: pbf16,
     a: bf16A,
     b: bf16B,
     out: bf16Out,
-    params: paramsBuffer,
-    numElements: numElements,
-    bytesPerElement: 2,
-    numIterations: numIterations,
-    numWarmupBatches: numWarmupBatches,
-    numMeasuredBatches: numMeasuredBatches,
-    numDispatches: numDispatches
-  ))
+    bytesPerElement: 2
+  )
+)
 
 // FP16
 let fp16A = makeRandomBuffer(device: device, count: numElements, type: UInt16.self) { i in
@@ -320,43 +320,19 @@ let fp16B = makeRandomBuffer(device: device, count: numElements, type: UInt16.se
 }
 let fp16Out = device.makeBuffer(
   length: numElements * MemoryLayout<UInt16>.stride,
-  options: [.storageModeShared, .hazardTrackingModeUntracked])!
+  options: [.storageModeShared, .hazardTrackingModeUntracked]
+)!
 
 results.append(
   benchmark(
     name: "FP16",
-    queue: queue,
     pipeline: p16,
     a: fp16A,
     b: fp16B,
     out: fp16Out,
-    params: paramsBuffer,
-    numElements: numElements,
-    bytesPerElement: 2,
-    numIterations: numIterations,
-    numWarmupBatches: numWarmupBatches,
-    numMeasuredBatches: numMeasuredBatches,
-    numDispatches: numDispatches
-  ))
-
-func getGPUCount(for device: MTLDevice) -> Int? {
-  let matchDict = IOServiceMatching("IOAccelerator")
-  var iterator: io_iterator_t = 0
-  guard IOServiceGetMatchingServices(kIOMainPortDefault, matchDict, &iterator) == KERN_SUCCESS
-  else { return nil }
-  defer { IOObjectRelease(iterator) }
-
-  var service = IOIteratorNext(iterator)
-  while service != 0 {
-    defer { IOObjectRelease(service) }
-    if let coreCount = IORegistryEntryCreateCFProperty(
-      service, "gpu-core-count" as CFString, kCFAllocatorDefault, 0)?.takeUnretainedValue() as? Int {
-      return coreCount
-    }
-    service = IOIteratorNext(iterator)
-  }
-  return nil
-}
+    bytesPerElement: 2
+  )
+)
 
 print()
 
